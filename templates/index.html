@@ -1,0 +1,430 @@
+{% extends "base.html" %}
+{% block content %}
+<div x-data="app()" x-init="init()">
+
+  <!-- KPI overview -->
+  <div class="kpi-grid">
+    <div class="kpi">
+      <span class="kpi-label">Total Leads</span>
+      <span class="kpi-value" x-text="leads.length">0</span>
+      <span class="kpi-foot">stored in local database</span>
+    </div>
+    <div class="kpi kpi-new">
+      <span class="kpi-label">New Leads</span>
+      <span class="kpi-value" x-text="newCount">0</span>
+      <span class="kpi-foot">generated since last export</span>
+    </div>
+    <div class="kpi">
+      <span class="kpi-label">Avg Digital Score</span>
+      <span class="kpi-value" x-text="avgScore">0</span>
+      <span class="kpi-foot">presence score out of 100</span>
+    </div>
+    <div class="kpi">
+      <span class="kpi-label">Active Jobs</span>
+      <span class="kpi-value" x-text="activeJobs">0</span>
+      <span class="kpi-foot">scheduled automations running</span>
+    </div>
+  </div>
+
+  <!-- Search & Scrape -->
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <span class="eyebrow">Step 01 &mdash; Discover</span>
+        <h2>Search &amp; Scrape Leads</h2>
+      </div>
+      <span class="hint-pill">Auto routes Local/SMB &rarr; Google Maps &middot; B2B/Industrial &rarr; LinkedIn</span>
+    </div>
+    <form @submit.prevent="runSearch">
+      <div class="grid grid-3">
+        <div>
+          <label>Mode</label>
+          <select x-model="form.mode">
+            <option value="auto">Auto (smart route)</option>
+            <option value="custom">Custom (pick platforms)</option>
+          </select>
+        </div>
+        <div>
+          <label>Domain / Industry</label>
+          <input x-model="form.domain" placeholder="Salon, Software, PLC, L&T..." required />
+        </div>
+        <div>
+          <label>Target Position / Role (optional)</label>
+          <input x-model="form.position" placeholder="CEO, Owner, Manager" />
+        </div>
+        <div>
+          <label>Company Name (optional)</label>
+          <input x-model="form.company_name" placeholder="e.g. L&T" />
+        </div>
+        <div>
+          <label>Location</label>
+          <input x-model="form.location" placeholder="City / Area" required />
+        </div>
+        <div>
+          <label>Distance Radius (km)</label>
+          <input type="number" x-model.number="form.radius_km" min="1" max="100" />
+        </div>
+      </div>
+
+      <!-- Platform selection (custom mode) -->
+      <div x-show="form.mode==='custom'" class="checkbox-row" style="margin-top:12px; border-top:1px solid #e2e8f0; padding-top:12px;">
+        <label><strong>Select platforms:</strong></label>
+        <label><input type="checkbox" value="gmaps" x-model="form.selected_sources"> Google Maps</label>
+        <label><input type="checkbox" value="linkedin" x-model="form.selected_sources"> LinkedIn</label>
+        <label><input type="checkbox" value="facebook" x-model="form.selected_sources"> Facebook</label>
+        <label><input type="checkbox" value="instagram" x-model="form.selected_sources"> Instagram</label>
+      </div>
+      <p class="muted" x-show="form.mode==='custom'" style="margin-top:6px;">Auto mode picks platforms automatically (Local/SMB → Google Maps; B2B/Industrial → LinkedIn).</p>
+
+      <div class="row" style="margin-top:12px;">
+        <button type="submit" class="btn btn-primary" :disabled="loading">
+          <span x-show="!loading">Run Scrape</span>
+          <span x-show="loading">Scraping…</span>
+        </button>
+        <span class="status" x-text="status"></span>
+      </div>
+    </form>
+  </div>
+
+  <!-- Filters -->
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <span class="eyebrow">Step 02 &mdash; Refine &amp; Export</span>
+        <h2>Filters &amp; CSV Export</h2>
+      </div>
+      <div class="actions">
+        <button @click="loadLeads" class="btn btn-secondary btn-sm" :disabled="loadingLeads" x-text="loadingLeads ? 'Loading…' : '↻ Refresh'"></button>
+        <a :href="exportNewUrl" class="btn btn-primary btn-sm" title="Download only leads generated since the last export" @click="scheduleRefresh">⬇ New Leads CSV</a>
+        <a :href="exportAllUrl" class="btn btn-secondary btn-sm" title="Download every lead in the database">⬇ All CSV</a>
+        <button @click="clearResults" class="btn btn-danger btn-sm">Clear Results</button>
+      </div>
+    </div>
+    <div class="row">
+      <div>
+        <label>Source</label>
+        <select x-model="filters.source" @change="loadLeads">
+          <option value="">All</option>
+          <option value="gmaps">Google Maps</option>
+          <option value="linkedin">LinkedIn</option>
+          <option value="facebook">Facebook</option>
+          <option value="instagram">Instagram</option>
+        </select>
+      </div>
+      <div>
+        <label>Has Website</label>
+        <select x-model="filters.has_website" @change="loadLeads">
+          <option value="">All</option>
+          <option value="true">Yes</option>
+          <option value="false">No</option>
+        </select>
+      </div>
+      <div>
+        <label>Company Size</label>
+        <select x-model="filters.company_size" @change="loadLeads">
+          <option value="">All</option>
+          <option value="1-10">1-10</option>
+          <option value="11-50">11-50</option>
+          <option value="51-200">51-200</option>
+          <option value="201-500">201-500</option>
+          <option value="501-1000">501-1000</option>
+          <option value="1000+">1000+</option>
+        </select>
+      </div>
+      <div>
+        <label>Min Score</label>
+        <input type="number" x-model.number="filters.min_score" @change="loadLeads" style="width:80px;" />
+      </div>
+      <div>
+        <label>Max Score</label>
+        <input type="number" x-model.number="filters.max_score" @change="loadLeads" style="width:80px;" />
+      </div>
+      <div>
+        <label>New only</label>
+        <select x-model="filters.is_new" @change="loadLeads">
+          <option value="">All</option>
+          <option value="true">New</option>
+          <option value="false">Existing</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <!-- Results -->
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <span class="eyebrow">Step 03 &mdash; Results</span>
+        <h2>Generated Leads</h2>
+      </div>
+      <span class="pill"><span class="kpi-label" style="margin:0;">Records</span>&nbsp;<strong x-text="leads.length">0</strong></span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th><th>Position</th><th>Company</th><th>Sources</th>
+            <th>Phone</th><th>Email</th><th>Location</th><th>Size</th>
+            <th>Website</th><th>Rating</th><th>Digital Score</th><th>Status</th><th>Generated</th>
+          </tr>
+        </thead>
+        <tbody>
+          <template x-for="l in leads" :key="l.id">
+            <tr>
+              <td x-text="l.name || '-'"></td>
+              <td x-text="l.position || '-'"></td>
+              <td x-text="l.company_name || '-'"></td>
+              <td>
+                <template x-for="s in (l.sources||[])" :key="s">
+                  <span class="src" :class="'src-' + s" x-text="srcLabel(s)"></span>
+                </template>
+              </td>
+              <td x-text="l.phone || '-'"></td>
+              <td x-text="l.email || '-'"></td>
+              <td x-text="l.location || '-'"></td>
+              <td x-text="l.company_size || '-'"></td>
+              <td>
+                <template x-if="l.has_website">
+                  <a :href="l.website_url" target="_blank" rel="noopener">Visit &#8599;</a>
+                </template>
+                <template x-if="!l.has_website"><span class="muted">None</span></template>
+              </td>
+              <td x-text="l.google_rating ? l.google_rating + ' ★ (' + (l.review_count||0) + ')' : '-'"></td>
+              <td>
+                <div class="score">
+                  <div class="score-track"><div class="score-fill" :style="'width:' + (l.digital_presence_score||0) + '%'"></div></div>
+                  <span class="score-num" x-text="l.digital_presence_score || 0"></span>
+                </div>
+              </td>
+              <td>
+                <span class="badge" :class="l.is_new ? 'badge-new' : 'badge-old'" x-text="l.is_new ? 'New' : 'Existing'"></span>
+              </td>
+              <td class="muted" x-text="fmtTime(l.created_at)"></td>
+            </tr>
+          </template>
+          <tr x-show="leads.length===0">
+            <td colspan="13">
+              <div class="empty">
+                <span class="empty-icon">&#128269;</span>
+                <div class="empty-title">No leads yet</div>
+                Run a scrape in Step 01 — results appear here instantly.
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Scheduled Jobs -->
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <span class="eyebrow">Step 04 &mdash; Automate</span>
+        <h2>Scheduled Automation Jobs</h2>
+      </div>
+      <span class="hint-pill">Frequency + exact run time (HH:MM) &middot; auto-CSV export</span>
+    </div>
+    <form id="jobs-form" @submit.prevent="createJob" class="grid grid-4" style="margin-bottom:12px;">
+      <div><label>Job name</label><input x-model="jobForm.job_name" required /></div>
+      <div><label>Mode</label>
+        <select x-model="jobForm.mode">
+          <option value="auto">Auto</option>
+          <option value="custom">Custom</option>
+        </select>
+      </div>
+      <div><label>Domain</label><input x-model="jobForm.domain" required /></div>
+      <div><label>Location</label><input x-model="jobForm.location" required /></div>
+      <div><label>Frequency</label>
+        <select x-model="jobForm.frequency">
+          <option value="daily">Daily</option>
+          <option value="weekly">Weekly</option>
+          <option value="interval_hours">Every N hours</option>
+        </select>
+      </div>
+      <div x-show="jobForm.frequency!=='interval_hours'"><label>Exact Time (HH:MM)</label><input type="time" x-model="jobForm.run_time" /></div>
+      <div x-show="jobForm.frequency==='weekly'"><label>Day (weekly)</label>
+        <select x-model="jobForm.run_days">
+          <option value="mon">Monday</option>
+          <option value="tue">Tuesday</option>
+          <option value="wed">Wednesday</option>
+          <option value="thu">Thursday</option>
+          <option value="fri">Friday</option>
+          <option value="sat">Saturday</option>
+          <option value="sun">Sunday</option>
+        </select>
+      </div>
+      <div x-show="jobForm.frequency==='interval_hours'"><label>Hours (interval)</label><input type="number" min="1" x-model.number="jobForm.interval_value" /></div>
+      <div x-show="jobForm.mode==='custom'" class="checkbox-row">
+        <label><strong>Platforms:</strong></label>
+        <label><input type="checkbox" value="gmaps" x-model="jobForm.selected_sources"> Google Maps</label>
+        <label><input type="checkbox" value="linkedin" x-model="jobForm.selected_sources"> LinkedIn</label>
+        <label><input type="checkbox" value="facebook" x-model="jobForm.selected_sources"> Facebook</label>
+        <label><input type="checkbox" value="instagram" x-model="jobForm.selected_sources"> Instagram</label>
+      </div>
+      <div style="display:flex; align-items:center; gap:6px; padding-top:18px;">
+        <input type="checkbox" x-model="jobForm.auto_export_csv" id="aec" style="width:auto;" />
+        <label for="aec" style="margin:0;">Auto-export CSV</label>
+      </div>
+      <div style="padding-top:18px; display:flex; gap:6px;">
+        <button type="submit" class="btn btn-primary" x-text="editJobId ? 'Update Job' : 'Create Job'"></button>
+        <button type="button" x-show="editJobId" @click="cancelEdit" class="btn btn-secondary">Cancel</button>
+      </div>
+    </form>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th><th>Mode</th><th>Domain</th><th>Freq</th><th>Time</th><th>Day</th><th>Next Run</th><th>Active</th><th>Last Run</th><th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <template x-for="j in jobs" :key="j.id">
+            <tr>
+              <td x-text="j.job_name"></td>
+              <td x-text="j.mode"></td>
+              <td x-text="j.domain"></td>
+              <td x-text="j.frequency"></td>
+              <td x-text="j.frequency==='interval_hours' ? ('every ' + (j.interval_value||24) + 'h') : (j.run_time || '-')"></td>
+              <td x-text="j.frequency==='weekly' ? (j.run_days || '-') : '-'"></td>
+              <td x-text="j.next_run_at ? j.next_run_at.replace('T',' ').slice(0,16) : '-'"></td>
+              <td x-text="j.is_active ? 'Yes' : 'No'"></td>
+              <td x-text="j.last_run_at ? j.last_run_at.replace('T',' ').slice(0,16) : '-'"></td>
+              <td>
+                <button @click="toggleJob(j.id)" class="btn btn-sm btn-secondary">Toggle</button>
+                <button @click="editJob(j)" class="btn btn-sm btn-secondary">Edit</button>
+                <button @click="runJobNow(j.id)" class="btn btn-sm btn-success">Run Now</button>
+                <button @click="deleteJob(j.id)" class="btn btn-sm btn-danger">Delete</button>
+              </td>
+            </tr>
+          </template>
+          <tr x-show="jobs.length===0">
+            <td colspan="10">
+              <div class="empty">
+                <span class="empty-icon">&#9203;</span>
+                <div class="empty-title">No scheduled jobs</div>
+                Create a job above to run scrapes automatically at an exact time.
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+function app() {
+  return {
+    form: { mode: 'auto', domain: '', position: '', company_name: '', location: '', radius_km: 10, max_results: 20, selected_sources: [] },
+    filters: { source: '', has_website: '', company_size: '', min_score: null, max_score: null, is_new: '' },
+    leads: [],
+    jobs: [],
+    loading: false,
+    loadingLeads: false,
+    status: '',
+    scheduleRefresh() { setTimeout(() => this.loadLeads(), 1500); },
+    jobForm: { job_name: '', mode: 'auto', domain: '', location: '', frequency: 'daily', interval_value: 24, run_time: '09:00', run_days: 'mon', selected_sources: [], auto_export_csv: false },
+    editJobId: null,
+    init() { this.loadLeads(); this.loadJobs(); },
+    /* ---- derived KPIs ---- */
+    get newCount() { return this.leads.filter(l => l.is_new).length; },
+    get avgScore() {
+      if (!this.leads.length) return 0;
+      const t = this.leads.reduce((a, l) => a + (l.digital_presence_score || 0), 0);
+      return Math.round(t / this.leads.length);
+    },
+    get activeJobs() { return this.jobs.filter(j => j.is_active).length; },
+    /* ---- formatters ---- */
+    srcLabel(s) {
+      return { gmaps: 'Google Maps', linkedin: 'LinkedIn', facebook: 'Facebook', instagram: 'Instagram' }[s] || s;
+    },
+    fmtTime(iso) {
+      if (!iso) return '-';
+      try {
+        const d = new Date(iso.endsWith('Z') || iso.includes('+') ? iso : iso + 'Z');
+        return d.toLocaleString(undefined, { year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+      } catch (e) { return iso.slice(0, 16).replace('T', ' '); }
+    },
+    async runSearch() {
+      this.loading = true; this.status = 'Scraping...';
+      const body = { ...this.form };
+      if (body.mode !== 'custom') body.selected_sources = null;
+      try {
+        const r = await fetch('/api/search/run', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+        const j = await r.json();
+        this.status = 'Done: ' + j.leads_found + ' found, ' + j.new_leads_added + ' new (sources: ' + (j.sources||[]).join(', ') + ')';
+      } catch (e) { this.status = 'Error: ' + e; }
+      this.loading = false;
+      await this.loadLeads();
+    },
+    async clearResults() {
+      if (!confirm('Clear all leads?')) return;
+      await fetch('/api/leads', { method: 'DELETE' });
+      await this.loadLeads();
+    },
+    loadingLeads: false,
+    async loadLeads() {
+      this.loadingLeads = true;
+      const params = new URLSearchParams();
+      if (this.filters.source) params.set('source', this.filters.source);
+      if (this.filters.has_website !== '') params.set('has_website', this.filters.has_website);
+      if (this.filters.company_size) params.set('company_size', this.filters.company_size);
+      if (this.filters.min_score != null && this.filters.min_score !== '') params.set('min_score', this.filters.min_score);
+      if (this.filters.max_score != null && this.filters.max_score !== '') params.set('max_score', this.filters.max_score);
+      if (this.filters.is_new !== '') params.set('is_new', this.filters.is_new);
+      params.set('limit', '500');
+      const r = await fetch('/api/leads?' + params.toString());
+      this.leads = await r.json();
+      this.loadingLeads = false;
+    },
+    get exportNewUrl() {
+      const params = new URLSearchParams();
+      if (this.filters.source) params.set('source', this.filters.source);
+      if (this.filters.has_website !== '') params.set('has_website', this.filters.has_website);
+      if (this.filters.company_size) params.set('company_size', this.filters.company_size);
+      if (this.filters.min_score != null && this.filters.min_score !== '') params.set('min_score', this.filters.min_score);
+      if (this.filters.max_score != null && this.filters.max_score !== '') params.set('max_score', this.filters.max_score);
+      params.set('only_new', '1');
+      params.set('mark_exported', '1');
+      return '/api/leads/export?' + params.toString();
+    },
+    get exportAllUrl() {
+      const params = new URLSearchParams();
+      if (this.filters.source) params.set('source', this.filters.source);
+      if (this.filters.has_website !== '') params.set('has_website', this.filters.has_website);
+      if (this.filters.company_size) params.set('company_size', this.filters.company_size);
+      if (this.filters.min_score != null && this.filters.min_score !== '') params.set('min_score', this.filters.min_score);
+      if (this.filters.max_score != null && this.filters.max_score !== '') params.set('max_score', this.filters.max_score);
+      params.set('only_new', '0');
+      params.set('mark_exported', '0');
+      return '/api/leads/export?' + params.toString();
+    },
+    async createJob() {
+      const body = { ...this.jobForm, selected_sources: [...this.jobForm.selected_sources], radius_km: 10 };
+      if (body.mode === 'custom' && body.selected_sources.length === 0) { alert('Select at least one platform for Custom mode.'); return; }
+      const isEdit = !!this.editJobId;
+      const r = await fetch(isEdit ? '/api/jobs/' + this.editJobId : '/api/jobs', { method: isEdit ? 'PATCH' : 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+      if (r.ok) { this.editJobId = null; this.jobForm.job_name = ''; this.jobForm.domain = ''; this.jobForm.location = ''; this.jobForm.run_time = '09:00'; this.jobForm.run_days = 'mon'; this.jobForm.selected_sources = []; await this.loadJobs(); }
+      else { const t = await r.text(); alert('Job ' + (isEdit ? 'update' : 'create') + ' failed: ' + t); }
+    },
+    editJob(j) {
+      // load job into the form for editing; submitting then PATCHes via editJobId
+      this.editJobId = j.id;
+      this.jobForm = { job_name: j.job_name, mode: j.mode, domain: j.domain || '', location: j.location || '',
+ frequency: j.frequency, interval_value: j.interval_value || 24, run_time: j.run_time || '09:00',
+        run_days: j.run_days || 'mon', selected_sources: [...(j.selected_sources || [])], auto_export_csv: !!j.auto_export_csv };
+      document.getElementById('jobs-form').scrollIntoView({ behavior: 'smooth' });
+    },
+    cancelEdit() { this.editJobId = null; },
+    async loadJobs() {
+      const r = await fetch('/api/jobs');
+      this.jobs = await r.json();
+    },
+    async toggleJob(id) { await fetch('/api/jobs/' + id + '/toggle', { method: 'PATCH' }); await this.loadJobs(); },
+    async runJobNow(id) { await fetch('/api/jobs/' + id + '/run', { method: 'POST' }); await this.loadJobs(); },
+    async deleteJob(id) { if (!confirm('Delete job?')) return; await fetch('/api/jobs/' + id, { method: 'DELETE' }); await this.loadJobs(); }
+  }
+}
+</script>
+{% endblock %}
